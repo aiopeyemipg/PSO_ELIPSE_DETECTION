@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import random
 import math
+import matplotlib.pyplot as plt
 
 # ===============================
 # 1. Load Image and Detect Edges
@@ -138,6 +139,8 @@ cv2.ellipse(image,
             0, 360,
             (0, 255, 0), 2)
 
-cv2.imshow("Detected Ellipse", image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+plt.figure()
+plt.title("Detected Ellipse")
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+plt.axis("off")
+plt.show()
