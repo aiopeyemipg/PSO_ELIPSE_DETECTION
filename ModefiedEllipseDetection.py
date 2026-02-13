@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # 1. LOAD IMAGE
 # ============================================================
 
-image = cv2.imread("Ellipses/id_518.png")
+image = cv2.imread("Ellipses/id_7.png")
 if image is None:
     raise ValueError("Image not found")
 
@@ -87,8 +87,8 @@ def ellipse_fitness(p):
     xr =  x*cos_t + y*sin_t
     yr = -x*sin_t + y*cos_t
 
-    f = (xr*xr)/(a*a) + (yr*yr)/(b*b)#distance to ellipse
-    dist = np.abs(f - 1)
+    f = (xr*xr)/(a*a) + (yr*yr)/(b*b)#ellipse Equation
+    dist = np.abs(f - 1)#distance to ellipse
 
     inliers = dist < 0.15
     inlier_ratio = np.mean(inliers)
@@ -105,7 +105,7 @@ def ellipse_fitness(p):
     return (
         np.mean(dist[inliers])
         + 0.7 * balance
-        + 0.01 * center_penalty
+        + 0.3 * center_penalty
     )
 
 # ============================================================

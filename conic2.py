@@ -8,7 +8,7 @@ from numpy.linalg import svd
 # 1. LOAD IMAGE
 # ============================================================
 
-image = cv2.imread("Ellipses/id_22.png")
+image = cv2.imread("ellipseTin.png")
 if image is None:
     raise ValueError("Image not found. Check file name and path.")
 
