@@ -7,7 +7,7 @@ import json
 # 1. LOAD IMAGE
 # ============================================================
 
-imageID = 1
+imageID = 26
 
 image_path = f"Ellipses/id_{imageID}.png"
 image = cv2.imread(image_path)
@@ -75,12 +75,21 @@ def ellipse_from_5_points(pts):
 # 4. BALANCED GEOMETRIC FITNESS FUNCTION
 # ============================================================
 
-cx_mean, cy_mean = np.mean(points, axis=0)
-
 def ellipse_fitness(p):
     xc, yc, a, b, theta = p
 
-    if a < 5 or b < 5: #Tiny Ellipse
+    H, W = gray.shape
+
+    # Hard geometric validity only
+    if a < 5 or b < 5:
+        return 1e9
+
+    if max(a, b) > 20:
+        return 1e9
+
+    if xc - a < 0 or xc + a > W:
+        return 1e9
+    if yc - b < 0 or yc + b > H:
         return 1e9
 
     cos_t = np.cos(theta)
@@ -92,47 +101,61 @@ def ellipse_fitness(p):
     xr =  x*cos_t + y*sin_t
     yr = -x*sin_t + y*cos_t
 
-    f = (xr*xr)/(a*a) + (yr*yr)/(b*b)#ellipse Equation=1
-    dist = np.abs(f - 1)#distance to ellipse
+    f = (xr*xr)/(a*a) + (yr*yr)/(b*b)
+    dist = np.abs(f - 1)
 
-    inliers = dist < 0.15
-    inlier_ratio = np.mean(inliers)
+    # Define inliers
+    threshold = 0.1
+    inliers = dist < threshold
 
-    if inlier_ratio < 0.35:
-        return 1e8
+    num_inliers = np.sum(inliers)
 
-    inside = np.sum(f < 1)
-    outside = np.sum(f > 1)
-    balance = abs(inside - outside) / len(f)
+    # If no inliers, penalize softly (NOT hard reject)
+    if num_inliers == 0:
+        return 1e6
 
-    center_penalty = np.hypot(xc - cx_mean, yc - cy_mean)
+    mean_error = np.mean(dist[inliers])
 
-    return (
-        np.mean(dist[inliers])
-        + 0.7 * balance
-        + 0.3 * center_penalty
-    )
+    # PURE INLIER-BASED OBJECTIVE
+    fitness = mean_error / (num_inliers + 1e-6)
+
+    return fitness
+
+
 
 # ============================================================
 # 5. INITIALIZE PSO FROM 5-POINT ELLIPSES
 # ============================================================
 
-num_particles = 100
+num_particles = 1000
 max_iter = 100
 dim = 5
 
-particles = []
-attempts = 0
+H, W = gray.shape
 
-while len(particles) < num_particles and attempts < 3000:
-    idx = np.random.choice(N, 5, replace=False)
-    ell = ellipse_from_5_points(points[idx])
-    if ell is not None:
-        particles.append(ell)
-    attempts += 1
+particles = []
+velocities = []
+
+for _ in range(num_particles):
+
+    # randomly select 20 edge points
+    idx = np.random.choice(N, 20, replace=False)
+    sample_pts = points[idx]
+
+    # estimate initial parameters from sampled points
+    xc = np.mean(sample_pts[:,0])
+    yc = np.mean(sample_pts[:,1])
+
+    a = np.std(sample_pts[:,0]) * 2
+    b = np.std(sample_pts[:,1]) * 2
+
+    theta = np.random.uniform(0, np.pi)
+
+    particles.append([xc, yc, a, b, theta])
+    velocities.append(np.zeros(dim))
 
 particles = np.array(particles)
-velocities = np.zeros_like(particles)
+velocities = np.array(velocities)
 
 pbest = particles.copy()
 pbest_scores = np.array([ellipse_fitness(p) for p in particles])
@@ -147,7 +170,7 @@ print("Initial best fitness:", gbest_score)
 # 6. PSO LOOP
 # ============================================================
 
-w, c1, c2 = 0.6, 1.5, 2
+w, c1, c2 = 0.2, 2, 2
 history = []
 
 for it in range(max_iter):
@@ -163,10 +186,15 @@ for it in range(max_iter):
         )
 
         particles[i] += velocities[i]
+        
+        # Axis constraint (5 ≤ axis ≤ 20)
+        particles[i, 2] = np.clip(particles[i, 2], 5, 20)
+        particles[i, 3] = np.clip(particles[i, 3], 5, 20)
 
-        particles[i, 2] = np.clip(particles[i, 2], 5, 3*np.std(points[:,0]))
-        particles[i, 3] = np.clip(particles[i, 3], 5, 3*np.std(points[:,1]))
+        # Angle normalization
         particles[i, 4] = np.mod(particles[i, 4], np.pi)
+
+
 
         score = ellipse_fitness(particles[i])
 
@@ -339,3 +367,57 @@ print(f"Semi-Minor Axis Accuracy: {acc_minor:.2f}%")
 print(f"Orientation Angle Accuracy: {acc_angle:.2f}%")
 
 print(f"\n==== Average Ellipse Accuracy: {avg_accuracy:.2f}% ====")
+
+
+# ============================================
+# VISUALIZE INLIERS OF BEST ELLIPSE
+# ============================================
+
+xc, yc, a, b, theta = gbest
+
+cos_t = np.cos(theta)
+sin_t = np.sin(theta)
+
+x = points[:, 0] - xc
+y = points[:, 1] - yc
+
+xr =  x*cos_t + y*sin_t
+yr = -x*sin_t + y*cos_t
+
+f = (xr*xr)/(a*a) + (yr*yr)/(b*b)
+dist = np.abs(f - 1)
+
+inliers = dist < 0.1
+
+inlier_points = points[inliers]
+outlier_points = points[~inliers]
+
+plt.figure(figsize=(6,6))
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+# Outliers in red
+plt.scatter(outlier_points[:,0], outlier_points[:,1],
+            s=5, c='red', alpha=0.3, label='Outliers')
+
+# Inliers in blue
+plt.scatter(inlier_points[:,0], inlier_points[:,1],
+            s=10, c='blue', alpha=0.8, label='Inliers')
+
+# Ellipse
+t = np.linspace(0, 2*np.pi, 600)
+x_ell = a * np.cos(t)
+y_ell = b * np.sin(t)
+
+xr_ell = x_ell*np.cos(theta) - y_ell*np.sin(theta) + xc
+yr_ell = x_ell*np.sin(theta) + y_ell*np.cos(theta) + yc
+
+plt.plot(xr_ell, yr_ell, 'lime', linewidth=2, label='Detected Ellipse')
+
+plt.legend()
+plt.title("Ellipse Fit with Inliers Visualization")
+plt.axis("off")
+plt.show()
+
+print("Total edge points:", len(points))
+print("Inlier count:", np.sum(inliers))
+print("Inlier ratio:", np.sum(inliers)/len(points))

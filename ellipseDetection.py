@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # 1. Load Image and Detect Edges
 # ===============================
 
-image = cv2.imread("ellips.jpg")
+image = cv2.imread("Ellipses/id_2.png")
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 edges = cv2.Canny(gray, 100, 200)
 

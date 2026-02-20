@@ -8,107 +8,99 @@ from numpy.linalg import svd
 # 1. LOAD IMAGE
 # ============================================================
 
-image = cv2.imread("Ellipses/id_2.png")
+image = cv2.imread("Ellipses/id_39.png")
 if image is None:
     raise ValueError("Image not found. Check file name and path.")
 
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-# ============================================================
-# 2. IMPROVED PREPROCESSING (NEW)
-# ============================================================
-
-# Gaussian blur to remove noise
-blur = cv2.GaussianBlur(gray, (5,5), 1.5)
-
-# Adaptive Canny thresholds
-median = np.median(blur)
-lower = int(max(0, 0.66 * median))
-upper = int(min(255, 1.33 * median))
-edges = cv2.Canny(blur, lower, upper)
-
-# Morphological closing (connect broken edges)
-kernel = np.ones((3,3), np.uint8)
-edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-
 plt.figure()
-plt.title("Improved Edge Detection")
-plt.imshow(edges, cmap='gray')
+plt.title("Original Image")
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 plt.axis("off")
 plt.show()
 
 # ============================================================
-# 3. DISTANCE TRANSFORM (NEW MAJOR IMPROVEMENT)
+# 2. EDGE DETECTION
 # ============================================================
 
-dist_transform = cv2.distanceTransform(255 - edges, cv2.DIST_L2, 5)
+edges = cv2.Canny(gray, 100, 200)
 
 plt.figure()
-plt.title("Distance Transform Map")
-plt.imshow(dist_transform, cmap='jet')
-plt.colorbar()
+plt.title("Canny Edge Detection")
+plt.imshow(edges, cmap='gray')
 plt.axis("off")
 plt.show()
 
 # Extract edge coordinates
 edge_points = np.column_stack(np.where(edges > 0))
-edge_points = np.flip(edge_points, axis=1)
+edge_points = np.flip(edge_points, axis=1)  # (row,col) → (x,y)
 
 num_edges = len(edge_points)
 print("Number of edge points detected:", num_edges)
 
+if num_edges < 50:
+    raise ValueError("Not enough edge points to select 50.")
+
+# Scatter plot
+plt.figure()
+plt.title("Edge Points Scatter Plot")
+plt.scatter(edge_points[:, 0], edge_points[:, 1], s=1)
+plt.gca().invert_yaxis()
+plt.show()
+
 # ============================================================
-# 4. FIT CONIC FROM 5 POINTS
+# 3. FIT CONIC FROM N POINTS (GENERALIZED SVD METHOD)
 # ============================================================
 
-def fit_ellipse_from_5pts(points):
-    M = []
-    for x, y in points:
-        M.append([x*x, x*y, y*y, x, y, 1])
-    M = np.array(M)
+def fit_ellipse_from_points(points):
+    M = np.column_stack([
+        points[:, 0]**2,
+        points[:, 0]*points[:, 1],
+        points[:, 1]**2,
+        points[:, 0],
+        points[:, 1],
+        np.ones(len(points))
+    ])
 
-    U, S, Vt = svd(M)
+    _, _, Vt = svd(M)
     params = Vt[-1]
-    return params
+    return params  # A,B,C,D,E,F
+
 
 # ============================================================
-# 5. CHECK IF CONIC IS ELLIPSE
+# 4. CHECK IF CONIC IS ELLIPSE
+# Condition: B² - 4AC < 0
 # ============================================================
 
 def is_ellipse(params):
     A, B, C, D, E, F = params
     return (B*B - 4*A*C) < 0
 
+
 # ============================================================
-# 6. ROBUST FITNESS FUNCTION (DISTANCE-BASED)
+# 5. FITNESS FUNCTION (Vectorized – Faster)
 # ============================================================
 
 def fitness(params):
     A, B, C, D, E, F = params
 
-    total_distance = 0
-    sample_points = 200
+    x = edge_points[:, 0]
+    y = edge_points[:, 1]
 
-    for t in np.linspace(0, 2*np.pi, sample_points):
-        # Parametric sampling using implicit gradient trick
-        x = int(250 * np.cos(t) + 250)  # temporary circle guess
-        y = int(250 * np.sin(t) + 250)
+    vals = A*x*x + B*x*y + C*y*y + D*x + E*y + F
+    total_error = np.sum(np.abs(vals))
 
-        if 0 <= x < dist_transform.shape[1] and 0 <= y < dist_transform.shape[0]:
-            total_distance += dist_transform[y, x]
-        else:
-            total_distance += 50  # penalty if outside
+    return 1 / (1 + total_error)
 
-    avg_distance = total_distance / sample_points
-
-    return 1 / (1 + avg_distance)
 
 # ============================================================
-# 7. PSO INITIALIZATION
+# 6. PSO INITIALIZATION (50 POINTS PER PARTICLE)
 # ============================================================
 
 num_particles = 100
 max_iter = 100
+num_selected_points = 40
 
 particles = []
 pbest = []
@@ -116,11 +108,11 @@ pbest_scores = []
 fitness_history = []
 
 for _ in range(num_particles):
-    idx = random.sample(range(num_edges), 5)
+    idx = random.sample(range(num_edges), num_selected_points)
     particles.append(idx)
 
     pts = edge_points[idx]
-    params = fit_ellipse_from_5pts(pts)
+    params = fit_ellipse_from_points(pts)
 
     if is_ellipse(params):
         score = fitness(params)
@@ -130,33 +122,41 @@ for _ in range(num_particles):
     pbest.append(idx)
     pbest_scores.append(score)
 
-gbest = pbest[np.argmax(pbest_scores)]
-gbest_score = max(pbest_scores)
+best_index = np.argmax(pbest_scores)
+gbest = pbest[best_index][:]
+gbest_score = pbest_scores[best_index]
+
+print("Initial Best Fitness:", gbest_score)
 
 # ============================================================
-# 8. PSO MAIN LOOP
+# 7. PSO MAIN LOOP (Discrete Mutation Version)
 # ============================================================
 
 for iteration in range(max_iter):
 
     for i in range(num_particles):
 
+        # Copy current particle
         new_particle = particles[i][:]
-        replace_index = random.randint(0, 4)
+
+        # Mutate one index
+        replace_index = random.randint(0, num_selected_points - 1)
         new_particle[replace_index] = random.randint(0, num_edges - 1)
 
         pts = edge_points[new_particle]
-        params = fit_ellipse_from_5pts(pts)
+        params = fit_ellipse_from_points(pts)
 
         if not is_ellipse(params):
             continue
 
         score = fitness(params)
 
+        # Update personal best
         if score > pbest_scores[i]:
             pbest_scores[i] = score
             pbest[i] = new_particle[:]
 
+        # Update global best
         if score > gbest_score:
             gbest_score = score
             gbest = new_particle[:]
@@ -167,7 +167,7 @@ for iteration in range(max_iter):
     print(f"Iteration {iteration+1} | Best Fitness: {gbest_score}")
 
 # ============================================================
-# 9. FITNESS CONVERGENCE
+# 8. FITNESS CONVERGENCE PLOT
 # ============================================================
 
 plt.figure()
@@ -175,10 +175,11 @@ plt.title("Fitness Convergence")
 plt.plot(fitness_history)
 plt.xlabel("Iteration")
 plt.ylabel("Best Fitness")
+plt.grid(True)
 plt.show()
 
 # ============================================================
-# 10. DRAW FINAL ELLIPSE
+# 9. DRAW FINAL DETECTED ELLIPSE
 # ============================================================
 
 best_pts = edge_points[gbest]
@@ -188,9 +189,20 @@ result = image.copy()
 cv2.ellipse(result, ellipse, (0, 255, 0), 2)
 
 plt.figure()
-plt.title("Final Detected Ellipse (Noise Robust)")
+plt.title("Final Detected Ellipse")
 plt.imshow(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
 plt.axis("off")
 plt.show()
 
-print("Final Best Fitness:", gbest_score)
+# ============================================================
+# 10. SHOW BEST 50 SELECTED POINTS
+# ============================================================
+
+plt.figure()
+plt.title("Best 50 Edge Points Used")
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+plt.scatter(best_pts[:, 0], best_pts[:, 1], s=40, c='yellow')
+plt.axis("off")
+plt.show()
+
+print("\nFinal Best Fitness:", gbest_score)
